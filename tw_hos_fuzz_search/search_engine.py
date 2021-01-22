@@ -6,6 +6,7 @@ from sklearn.metrics.pairwise import cosine_similarity
 
 import numpy as np
 from pprint import pprint
+import argparse
 
 DEFAULT_DIR = Path(__file__).parent
 DATA_DIR = DEFAULT_DIR / "data"
@@ -239,11 +240,12 @@ class SearchEngine():
         return results
 
 def main():
+    parser = argparse.ArgumentParser()
+    parser.add_argument("query", type=str, help="hospital query string")
+    parser.add_argument("k", type=int, help="topk's k")
+    args = parser.parse_args()
     se = SearchEngine()
-    results = se.search(SearchQuerySpec(query="亞洲醫院", k=5))
-    pprint(results)
-    print("---")
-    results = se.search(SearchQuerySpec(query="中華牙醫", k=5))
+    results = se.search(SearchQuerySpec(args.query, args.k))
     pprint(results)
 
 if __name__ == "__main__":
