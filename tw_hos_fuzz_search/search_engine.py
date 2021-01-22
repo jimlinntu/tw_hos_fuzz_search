@@ -12,20 +12,24 @@ DATA_DIR = DEFAULT_DIR / "data"
 
 HOSPBSC_PATH = DATA_DIR / "hospbsc.txt"
 REGION_PATH = DATA_DIR / "regions.txt"
+HOSTP_CODE_PATH = DATA_DIR / "hosp_code.txt"
 
 class SearchResultSpec():
-    def __init__(self, region_id, region, hos_id, hos_name, address, confidence):
+    def __init__(self, region_id, region, hos_id, hos_name, address, confidence, type_name):
         assert isinstance(region_id, int)
         assert isinstance(region, str)
         assert isinstance(hos_id, str)
         assert isinstance(hos_name, str)
         assert isinstance(address, str)
+        assert isinstance(type_name, str)
+
         self.region_id = region_id
         self.region = region
         self.hos_id = hos_id
         self.hos_name = hos_name
         self.address = address
         self.confidence = float(confidence)
+        self.type_name = type_name
 
     def __str__(self):
         return str(self.dict())
@@ -39,7 +43,8 @@ class SearchResultSpec():
                     hos_id=self.hos_id,
                     hos_name=self.hos_name,
                     address=self.address,
-                    confidence=self.confidence)
+                    confidence=self.confidence,
+                    type_name=self.type_name)
 
 class SearchQuerySpec():
     def __init__(self, query, k):
@@ -70,7 +75,7 @@ class SearchQuerySpec():
         return True
 
 class SearchEngine():
-    def __init__(self, hospbsc_path=None, region_path=None, debug=True):
+    def __init__(self, hospbsc_path=None, region_path=None, hosp_code_path=None, debug=True):
         self.hospbsc_path = HOSPBSC_PATH
         if hospbsc_path is not None:
             assert isinstance(hospbsc_path, Path)
@@ -81,14 +86,22 @@ class SearchEngine():
             assert isinstance(region_path, Path)
             self.region_path = region_path
 
+        self.hosp_code_path = HOSTP_CODE_PATH
+        if hosp_code_path is not None:
+            assert isinstance(hosp_code_path, Path)
+            self.hosp_code_path = hosp_code_path
+
         self.field_mapper = \
             {"分區別": "region",
              "醫事機構代碼": "hos_id",
              "醫事機構名稱": "hos_name",
              "機構地址": "address"}
 
-        self.region_ids, hos_ids, hos_names, self.addresses = self._parse_hospbsc(remove_empty_address=True)
+        self.hosp_code_map = self._parse_hosp_code()
+        self.region_ids, hos_ids, hos_names, self.addresses, self.type_names \
+            = self._parse_hospbsc(self.hosp_code_map, remove_empty_address=True)
         self.region_map = self._parse_region()
+        self.type_scores = self._build_type_scores_by_rules(self.type_names)
 
         self.hos_ids = hos_ids
         self.hos_names = hos_names
@@ -114,17 +127,17 @@ class SearchEngine():
             print("self.tfidf_matrix.shape: {}".format(self.tfidf_matrix.shape))
             print("self.tfidf_matrix length of the feature vector: {}".format(self.tfidf_matrix.shape[1]))
 
-    def _parse_hospbsc(self, remove_empty_address):
+    def _parse_hospbsc(self, hosp_code_map, remove_empty_address):
         assert isinstance(remove_empty_address, bool)
 
-        region_ids, hos_ids, hos_names, addresses = [], [], [], []
+        region_ids, hos_ids, hos_names, addresses, type_names = [], [], [], [], []
         with self.hospbsc_path.open(encoding="utf-16", newline='') as csvfile:
             reader = csv.reader(csvfile, delimiter=",")
             next(reader, None) # ignore the header
             for row in reader:
-                region_id, hos_id, hos_name, addr = \
+                region_id, hos_id, hos_name, addr, type_id, category = \
                     int(row[0].strip()), row[1].strip(),\
-                    row[2].strip(), row[3].strip()
+                    row[2].strip(), row[3].strip(), row[7].strip(), row[8].strip()
 
                 if remove_empty_address and len(addr) == 0:
                     continue
@@ -133,8 +146,9 @@ class SearchEngine():
                 hos_ids.append(hos_id)
                 hos_names.append(hos_name)
                 addresses.append(addr)
+                type_names.append(hosp_code_map[(type_id, category)])
 
-        return region_ids, hos_ids, hos_names, addresses
+        return region_ids, hos_ids, hos_names, addresses, type_names
 
     def _parse_region(self):
         region_map = dict()
@@ -147,6 +161,34 @@ class SearchEngine():
                 region_map[region_id] = region
         return region_map
 
+    def _parse_hosp_code(self):
+        hosp_code_map = dict()
+        with self.hosp_code_path.open(encoding="utf-8", newline='') as csvfile:
+            reader = csv.reader(csvfile, delimiter=",")
+            next(reader, None)
+            for row in reader:
+                type_id, category = row[0], row[2]
+                type_name = row[1]
+                hosp_code_map[(type_id, category)] = type_name
+        return hosp_code_map
+
+    def _build_type_scores_by_rules(self, type_names):
+        '''
+            根據 型態別 給予加分
+            Ex. 綜合醫院 should have higher scores while 藥局 will have lower score
+        '''
+        type_scores = []
+        for type_name in type_names:
+            score = 0.
+            if "綜合" in type_name:
+                score += 0.4
+            if "醫院" in type_name:
+                score += 0.3
+            if "診所" in type_name:
+                score += 0.1
+            type_scores.append(score)
+        return type_scores
+
     def query2matrix(self, query):
         assert isinstance(query, str)
         query_matrix = self.vectorizer.transform([" ".join(query)])
@@ -158,6 +200,9 @@ class SearchEngine():
         assert kernel.shape == (1, len(self.hos_names))
         return kernel
 
+    def weighted_scores(self, scores):
+        return 0.7 * scores + 0.3 * np.array(self.type_scores)
+
     def search(self, query_spec):
         assert isinstance(query_spec, SearchQuerySpec)
         query_hos_name = query_spec.query
@@ -166,6 +211,8 @@ class SearchEngine():
         query_matrix = self.query2matrix(query_hos_name)
         kernel = self.compute_kernel_matrix(query_matrix)
         scores = kernel.ravel() # avoid copy
+
+        scores = self.weighted_scores(scores)
 
         retrieved_indices = []
 
@@ -187,13 +234,16 @@ class SearchEngine():
         results = [SearchResultSpec(
                     region_id=self.region_ids[i], region=self.region_map[self.region_ids[i]],
                     hos_id=self.hos_ids[i], hos_name=self.hos_names[i],
-                    address=self.addresses[i], confidence=scores[i])
+                    address=self.addresses[i], confidence=scores[i], type_name=self.type_names[i])
                     for i in retrieved_indices]
         return results
 
 def main():
     se = SearchEngine()
-    results = se.search("臺灣大學醫院", k=100)
+    results = se.search(SearchQuerySpec(query="亞洲醫院", k=5))
+    pprint(results)
+    print("---")
+    results = se.search(SearchQuerySpec(query="中華牙醫", k=5))
     pprint(results)
 
 if __name__ == "__main__":
