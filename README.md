@@ -6,7 +6,8 @@ A general-purpose fuzzy search engine for all hospital names (provided by Nation
 * `pip install -r requirements.txt`
 
 ## Run once
-* `python -m tw_hos_fuzz_search.search_engine '國立臺大附設醫院' 3`
+* Basic search: `python -m tw_hos_fuzz_search.search_engine '國立臺大附設醫院' 3`
+* Search with region provided: `python -m tw_hos_fuzz_search.search_engine '國立臺大附設醫院' 3 --region 臺北業務組`
 
 ## Run as an API Server
 * `./run.sh`
