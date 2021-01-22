@@ -48,11 +48,13 @@ class SearchResultSpec():
                     type_name=self.type_name)
 
 class SearchQuerySpec():
-    def __init__(self, query, k):
+    def __init__(self, query, k, region):
         assert isinstance(query, str)
         assert isinstance(k, int)
+        assert isinstance(region, str)
         self.query = query
         self.k = k
+        self.region = region
 
     @staticmethod
     def fromDict(query_dict):
@@ -101,7 +103,8 @@ class SearchEngine():
         self.hosp_code_map = self._parse_hosp_code()
         self.region_ids, hos_ids, hos_names, self.addresses, self.type_names \
             = self._parse_hospbsc(self.hosp_code_map, remove_empty_address=True)
-        self.region_map = self._parse_region()
+        self.region_map, self.region_set = self._parse_region()
+        self.regions = [self.region_map[idx] for idx in self.region_ids]
         self.type_scores = self._build_type_scores_by_rules(self.type_names)
 
         self.hos_ids = hos_ids
@@ -153,14 +156,17 @@ class SearchEngine():
 
     def _parse_region(self):
         region_map = dict()
+        region_set = set()
         with self.region_path.open(encoding="utf-8", newline='') as csvfile:
             reader = csv.reader(csvfile, delimiter=",")
             next(reader, None)
             for row in reader:
                 region_id = int(row[0])
                 region = row[1]
+
                 region_map[region_id] = region
-        return region_map
+                region_set.add(region)
+        return region_map, region_set
 
     def _parse_hosp_code(self):
         hosp_code_map = dict()
@@ -199,21 +205,33 @@ class SearchEngine():
         assert query_matrix.shape == (1, len(self.keywords))
         kernel = cosine_similarity(query_matrix, self.tfidf_matrix)
         assert kernel.shape == (1, len(self.hos_names))
-        return kernel
+        return kernel.ravel()
 
-    def weighted_scores(self, scores):
-        return 0.7 * scores + 0.3 * np.array(self.type_scores)
+    def compute_contain_substr(self, query):
+        assert isinstance(query, str)
+        scores = np.array([int(query in hos_name) for hos_name in self.hos_names], dtype=np.int32)
+        return scores
+
+    def weighted_scores(self, scores, substr_scores):
+        return 0.5 * scores + 0.3 * np.array(self.type_scores) + 0.2 * substr_scores
 
     def search(self, query_spec):
         assert isinstance(query_spec, SearchQuerySpec)
         query_hos_name = query_spec.query
         k = query_spec.k
+        region = query_spec.region
         assert isinstance(query_hos_name, str)
         query_matrix = self.query2matrix(query_hos_name)
-        kernel = self.compute_kernel_matrix(query_matrix)
-        scores = kernel.ravel() # avoid copy
+        scores = self.compute_kernel_matrix(query_matrix)
+        substr_scores = self.compute_contain_substr(query_hos_name)
 
-        scores = self.weighted_scores(scores)
+        scores = self.weighted_scores(scores, substr_scores)
+        scores_mask = np.ones((len(scores), ), dtype=np.int32)
+        if region in self.region_set:
+            mask_indices = [i for i, r in enumerate(self.regions) if region != r]
+            scores_mask[mask_indices] = 0 # ignore these scores
+
+        scores = scores * scores_mask
 
         retrieved_indices = []
 
@@ -233,7 +251,7 @@ class SearchEngine():
             retrieved_indices = topk_indices_sorted
 
         results = [SearchResultSpec(
-                    region_id=self.region_ids[i], region=self.region_map[self.region_ids[i]],
+                    region_id=self.region_ids[i], region=self.regions[i],
                     hos_id=self.hos_ids[i], hos_name=self.hos_names[i],
                     address=self.addresses[i], confidence=scores[i], type_name=self.type_names[i])
                     for i in retrieved_indices]
@@ -243,9 +261,10 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("query", type=str, help="hospital query string")
     parser.add_argument("k", type=int, help="topk's k")
+    parser.add_argument("--region", type=str, default="")
     args = parser.parse_args()
     se = SearchEngine()
-    results = se.search(SearchQuerySpec(args.query, args.k))
+    results = se.search(SearchQuerySpec(args.query, args.k, args.region))
     pprint(results)
 
 if __name__ == "__main__":
