@@ -1,5 +1,5 @@
 # tw_hos_fuzz_search
-A general purpose fuzzy search engine for all hospital names (provided by National H in Taiwan.
+A general-purpose fuzzy search engine for all hospital names (provided by National Health Insurance Administration) in Taiwan.
 
 ## Environment
 * Python 3.9.1
@@ -13,7 +13,7 @@ A general purpose fuzzy search engine for all hospital names (provided by Nation
 
 ## Dockerized environment
 * `docker build -t jimlin7777/tw_hos_fuzz_search .`
-* `docker run -p <port you want to exposed>:80 jimlin7777/tw_hos_fuzz_search`
+* `docker run -p <port you want to expose>:80 jimlin7777/tw_hos_fuzz_search`
 
 
 ## References
