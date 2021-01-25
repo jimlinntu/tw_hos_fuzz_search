@@ -58,7 +58,7 @@ class SearchQuerySpec():
 
     @staticmethod
     def fromDict(query_dict):
-        return SearchQuerySpec(query_dict["query"], query_dict["k"])
+        return SearchQuerySpec(query_dict["query"], query_dict["k"], query_dict.get("region", ""))
 
     @staticmethod
     def check_valid(query_dict):
@@ -215,9 +215,15 @@ class SearchEngine():
     def weighted_scores(self, scores, substr_scores):
         return 0.5 * scores + 0.3 * np.array(self.type_scores) + 0.2 * substr_scores
 
-    def search(self, query_spec):
+    def preprocess_query(self, query):
+        query = re.sub("[0-9]", "", query)
+        return query
+
+    def search(self, query_spec, preprocess=True):
         assert isinstance(query_spec, SearchQuerySpec)
         query_hos_name = query_spec.query
+        if preprocess:
+            query_hos_name = self.preprocess_query(query_hos_name)
         k = query_spec.k
         region = query_spec.region
         assert isinstance(query_hos_name, str)
@@ -261,7 +267,7 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("query", type=str, help="hospital query string")
     parser.add_argument("k", type=int, help="topk's k")
-    parser.add_argument("--region", type=str, default="")
+    parser.add_argument("--region", type=str, default="", help="See tw_hos_fuzz_search/data/regions.txt for supported region values")
     args = parser.parse_args()
     se = SearchEngine()
     results = se.search(SearchQuerySpec(args.query, args.k, args.region))
