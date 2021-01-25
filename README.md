@@ -11,6 +11,13 @@ A general-purpose fuzzy search engine for all hospital names (provided by Nation
 
 ## Run as an API Server
 * `./run.sh`
+    * Example (in Python):
+    ```python
+    import requests
+    endpoint = "<your api endpoint>"
+    res = requests.post("http://{}/search".format(endpoint), json={"query": "中國醫", "k": 3})
+    print(res.json())
+    ```
 
 ## Dockerized environment
 * `docker build -t jimlin7777/tw_hos_fuzz_search .`
