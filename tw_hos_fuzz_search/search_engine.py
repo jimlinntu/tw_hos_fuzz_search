@@ -3,6 +3,7 @@ import csv
 import collections
 from sklearn.feature_extraction.text import TfidfVectorizer
 from sklearn.metrics.pairwise import cosine_similarity
+import re
 
 import numpy as np
 from pprint import pprint
@@ -224,6 +225,8 @@ class SearchEngine():
         query_hos_name = query_spec.query
         if preprocess:
             query_hos_name = self.preprocess_query(query_hos_name)
+        if len(query_hos_name) == 0:
+            return []
         k = query_spec.k
         region = query_spec.region
         assert isinstance(query_hos_name, str)
