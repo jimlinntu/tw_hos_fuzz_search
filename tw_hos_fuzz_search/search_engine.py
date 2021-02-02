@@ -13,6 +13,7 @@ DEFAULT_DIR = Path(__file__).parent
 DATA_DIR = DEFAULT_DIR / "data"
 
 HOSPBSC_PATH = DATA_DIR / "hospbsc.txt"
+EXTEND_HOSPITALS_PATH = DATA_DIR / "extend_hospitals.txt"
 REGION_PATH = DATA_DIR / "regions.txt"
 HOSTP_CODE_PATH = DATA_DIR / "hosp_code.txt"
 
@@ -79,11 +80,16 @@ class SearchQuerySpec():
         return True
 
 class SearchEngine():
-    def __init__(self, hospbsc_path=None, region_path=None, hosp_code_path=None, debug=True):
+    def __init__(self, hospbsc_path=None, extend_hospitals_path=None, region_path=None, hosp_code_path=None, debug=True):
         self.hospbsc_path = HOSPBSC_PATH
         if hospbsc_path is not None:
             assert isinstance(hospbsc_path, Path)
             self.hospbsc_path = hospbsc_path
+
+        self.extend_hospitals_path = EXTEND_HOSPITALS_PATH
+        if extend_hospitals_path is not None:
+            assert isinstance(extend_hospitals_path, Path)
+            self.extend_hospitals_path = extend_hospitals_path
 
         self.region_path = REGION_PATH
         if region_path is not None:
@@ -95,15 +101,10 @@ class SearchEngine():
             assert isinstance(hosp_code_path, Path)
             self.hosp_code_path = hosp_code_path
 
-        self.field_mapper = \
-            {"分區別": "region",
-             "醫事機構代碼": "hos_id",
-             "醫事機構名稱": "hos_name",
-             "機構地址": "address"}
-
         self.hosp_code_map = self._parse_hosp_code()
         self.region_ids, hos_ids, hos_names, self.addresses, self.type_names \
-            = self._parse_hospbsc(self.hosp_code_map, remove_empty_address=True)
+            = self._parse_hospbsc(self.hosp_code_map, remove_empty_address=True,
+                    add_extend_hospitals=True)
         self.region_map, self.region_set = self._parse_region()
         self.regions = [self.region_map[idx] for idx in self.region_ids]
         self.type_scores = self._build_type_scores_by_rules(self.type_names)
@@ -132,8 +133,9 @@ class SearchEngine():
             print("self.tfidf_matrix.shape: {}".format(self.tfidf_matrix.shape))
             print("self.tfidf_matrix length of the feature vector: {}".format(self.tfidf_matrix.shape[1]))
 
-    def _parse_hospbsc(self, hosp_code_map, remove_empty_address):
+    def _parse_hospbsc(self, hosp_code_map, remove_empty_address, add_extend_hospitals):
         assert isinstance(remove_empty_address, bool)
+        assert isinstance(add_extend_hospitals, bool)
 
         region_ids, hos_ids, hos_names, addresses, type_names = [], [], [], [], []
         with self.hospbsc_path.open(encoding="utf-16", newline='') as csvfile:
@@ -152,6 +154,24 @@ class SearchEngine():
                 hos_names.append(hos_name)
                 addresses.append(addr)
                 type_names.append(hosp_code_map[(type_id, category)])
+
+        if add_extend_hospitals:
+            with self.extend_hospitals_path.open(encoding="utf-8", newline='') as csvfile:
+                reader = csv.reader(csvfile, delimiter=",")
+                next(reader, None)
+                for row in reader:
+                    region_id, hos_id, hos_name, addr, type_id, category = \
+                        int(row[0].strip()), row[1].strip(),\
+                        row[2].strip(), row[3].strip(), row[7].strip(), row[8].strip()
+
+                    if remove_empty_address and len(addr) == 0:
+                        continue
+
+                    region_ids.append(region_id)
+                    hos_ids.append(hos_id)
+                    hos_names.append(hos_name)
+                    addresses.append(addr)
+                    type_names.append("") # we don't know the extend hospital's type_name!
 
         return region_ids, hos_ids, hos_names, addresses, type_names
 
