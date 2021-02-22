@@ -11,7 +11,7 @@ def search():
     if not SearchQuerySpec.check_valid(req_dict):
         return {"results": [], "message": "query is invalid"}, 400
 
-    print("[i] Request query string: {}".format(req_dict["query"]))
+    print("[i] Request query dictionary: {}".format(req_dict))
 
     query_spec = SearchQuerySpec.fromDict(req_dict)
     results = se.search(query_spec)
