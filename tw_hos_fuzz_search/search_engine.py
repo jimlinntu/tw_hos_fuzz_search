@@ -15,16 +15,18 @@ DATA_DIR = DEFAULT_DIR / "data"
 HOSPBSC_PATH = DATA_DIR / "hospbsc.txt"
 EXTEND_HOSPITALS_PATH = DATA_DIR / "extend_hospitals.txt"
 REGION_PATH = DATA_DIR / "regions.txt"
+DESIGNATED_TYPES_PATH = DATA_DIR / "designated_types.txt"
 HOSTP_CODE_PATH = DATA_DIR / "hosp_code.txt"
 
 class SearchResultSpec():
-    def __init__(self, region_id, region, hos_id, hos_name, address, confidence, type_name):
+    def __init__(self, region_id, region, hos_id, hos_name, address, confidence, type_name, designated_type):
         assert isinstance(region_id, int)
         assert isinstance(region, str)
         assert isinstance(hos_id, str)
         assert isinstance(hos_name, str)
         assert isinstance(address, str)
         assert isinstance(type_name, str)
+        assert isinstance(designated_type, str)
 
         self.region_id = region_id
         self.region = region
@@ -32,7 +34,8 @@ class SearchResultSpec():
         self.hos_name = hos_name
         self.address = address
         self.confidence = float(confidence)
-        self.type_name = type_name
+        self.type_name = type_name # 型態別名稱
+        self.designated_type = designated_type# 特約類別說明
 
     def __str__(self):
         return str(self.dict())
@@ -47,20 +50,24 @@ class SearchResultSpec():
                     hos_name=self.hos_name,
                     address=self.address,
                     confidence=self.confidence,
-                    type_name=self.type_name)
+                    type_name=self.type_name,
+                    designated_type=self.designated_type)
 
 class SearchQuerySpec():
-    def __init__(self, query, k, region):
+    def __init__(self, query, k, region, designated_types):
         assert isinstance(query, str)
         assert isinstance(k, int)
         assert isinstance(region, str)
+        assert isinstance(designated_types, list)
         self.query = query
         self.k = k
         self.region = region
+        self.designated_types = designated_types
 
     @staticmethod
     def fromDict(query_dict):
-        return SearchQuerySpec(query_dict["query"], query_dict["k"], query_dict.get("region", ""))
+        return SearchQuerySpec(query_dict["query"], query_dict["k"],
+                               query_dict.get("region", ""), query_dict.get("designated_types", []))
 
     @staticmethod
     def check_valid(query_dict):
@@ -80,7 +87,10 @@ class SearchQuerySpec():
         return True
 
 class SearchEngine():
-    def __init__(self, hospbsc_path=None, extend_hospitals_path=None, region_path=None, hosp_code_path=None, debug=True):
+    def __init__(self, hospbsc_path=None, extend_hospitals_path=None, region_path=None,
+                 designated_types_path=None, hosp_code_path=None, debug=True):
+        self.debug = debug
+
         self.hospbsc_path = HOSPBSC_PATH
         if hospbsc_path is not None:
             assert isinstance(hospbsc_path, Path)
@@ -96,14 +106,20 @@ class SearchEngine():
             assert isinstance(region_path, Path)
             self.region_path = region_path
 
+        self.designated_types_path = DESIGNATED_TYPES_PATH
+        if designated_types_path is not None:
+            assert isinstance(designated_types_path, Path)
+            self.designated_types_path = designated_type_path
+
         self.hosp_code_path = HOSTP_CODE_PATH
         if hosp_code_path is not None:
             assert isinstance(hosp_code_path, Path)
             self.hosp_code_path = hosp_code_path
 
         self.hosp_code_map = self._parse_hosp_code()
-        self.region_ids, hos_ids, hos_names, self.addresses, self.type_names \
-            = self._parse_hospbsc(self.hosp_code_map, remove_empty_address=True,
+        self.designated_types_map, self.designated_types_set = self._parse_designated_types()
+        self.region_ids, hos_ids, hos_names, self.addresses, self.type_names, self.designated_types_strs \
+            = self._parse_hospbsc(self.hosp_code_map, self.designated_types_map, remove_empty_address=True,
                     add_extend_hospitals=True)
         self.region_map, self.region_set = self._parse_region()
         self.regions = [self.region_map[idx] for idx in self.region_ids]
@@ -133,18 +149,22 @@ class SearchEngine():
             print("self.tfidf_matrix.shape: {}".format(self.tfidf_matrix.shape))
             print("self.tfidf_matrix length of the feature vector: {}".format(self.tfidf_matrix.shape[1]))
 
-    def _parse_hospbsc(self, hosp_code_map, remove_empty_address, add_extend_hospitals):
+    def _parse_hospbsc(self, hosp_code_map, designated_types_map, remove_empty_address, add_extend_hospitals):
         assert isinstance(remove_empty_address, bool)
         assert isinstance(add_extend_hospitals, bool)
 
-        region_ids, hos_ids, hos_names, addresses, type_names = [], [], [], [], []
+        assert isinstance(hosp_code_map, dict)
+        assert isinstance(designated_types_map, dict)
+
+        region_ids, hos_ids, hos_names, addresses, type_names, designated_types_strs = \
+            [], [], [], [], [], []
         with self.hospbsc_path.open(encoding="utf-16", newline='') as csvfile:
             reader = csv.reader(csvfile, delimiter=",")
             next(reader, None) # ignore the header
             for row in reader:
-                region_id, hos_id, hos_name, addr, type_id, category = \
+                region_id, hos_id, hos_name, addr, designated_type_id, type_id, category = \
                     int(row[0].strip()), row[1].strip(),\
-                    row[2].strip(), row[3].strip(), row[7].strip(), row[8].strip()
+                    row[2].strip(), row[3].strip(), row[6].strip(), row[7].strip(), row[8].strip()
 
                 if remove_empty_address and len(addr) == 0:
                     continue
@@ -155,14 +175,22 @@ class SearchEngine():
                 addresses.append(addr)
                 type_names.append(hosp_code_map[(type_id, category)])
 
+                if designated_type_id not in designated_types_map:
+                    if self.debug:
+                        print("衛福部的朋友, {}'s 特約類別 {} 在對照表沒出現過! 修一下好嗎".format(hos_name, designated_type_id))
+                    # 用 不詳 來代替
+                    designated_types_strs.append(designated_types_map["X"])
+                else:
+                    designated_types_strs.append(designated_types_map[designated_type_id])
+
         if add_extend_hospitals:
             with self.extend_hospitals_path.open(encoding="utf-8", newline='') as csvfile:
                 reader = csv.reader(csvfile, delimiter=",")
                 next(reader, None)
                 for row in reader:
-                    region_id, hos_id, hos_name, addr, type_id, category = \
+                    region_id, hos_id, hos_name, addr, designated_type_id, type_id, category = \
                         int(row[0].strip()), row[1].strip(),\
-                        row[2].strip(), row[3].strip(), row[7].strip(), row[8].strip()
+                        row[2].strip(), row[3].strip(), row[6].strip(), row[7].strip(), row[8].strip()
 
                     if remove_empty_address and len(addr) == 0:
                         continue
@@ -173,7 +201,10 @@ class SearchEngine():
                     addresses.append(addr)
                     type_names.append("") # we don't know the extend hospital's type_name!
 
-        return region_ids, hos_ids, hos_names, addresses, type_names
+                    assert designated_type_id in designated_types_map, "自己加的 {} 自己負責!".format(self.extend_hospitals_path)
+                    designated_types_strs.append(designated_types_map[designated_type_id])
+
+        return region_ids, hos_ids, hos_names, addresses, type_names, designated_types_strs
 
     def _parse_region(self):
         region_map = dict()
@@ -199,6 +230,20 @@ class SearchEngine():
                 type_name = row[1]
                 hosp_code_map[(type_id, category)] = type_name
         return hosp_code_map
+
+    def _parse_designated_types(self):
+        designated_types_map = dict()
+        designated_types_set = set()
+
+        with self.designated_types_path.open(encoding="utf-8", newline='') as csvfile:
+            reader = csv.reader(csvfile, delimiter=",")
+            next(reader, None)
+            for row in reader:
+                type_id, type_str = row[0], row[1]
+                designated_types_map[type_id] = type_str
+                designated_types_set.add(type_str)
+
+        return designated_types_map, designated_types_set
 
     def _build_type_scores_by_rules(self, type_names):
         '''
@@ -247,19 +292,29 @@ class SearchEngine():
             query_hos_name = self.preprocess_query(query_hos_name)
         if len(query_hos_name) == 0:
             return []
+
         k = query_spec.k
         region = query_spec.region
+        designated_types = query_spec.designated_types
+        effective_designated_types_set = set([d_type for d_type in designated_types if d_type in self.designated_types_set])
+
         assert isinstance(query_hos_name, str)
         query_matrix = self.query2matrix(query_hos_name)
         scores = self.compute_kernel_matrix(query_matrix)
         substr_scores = self.compute_contain_substr(query_hos_name)
 
         scores = self.weighted_scores(scores, substr_scores)
+        # Generate the mask for 分區別
         scores_mask = np.ones((len(scores), ), dtype=np.int32)
         if region in self.region_set:
             mask_indices = [i for i, r in enumerate(self.regions) if region != r]
             scores_mask[mask_indices] = 0 # ignore these scores
 
+        # Generate the mask for 特約類別
+        mask_indices = [i for i, d_type in enumerate(self.designated_types_strs) if d_type not in effective_designated_types_set]
+        scores_mask[mask_indices] = 0
+
+        # Apply the mask
         scores = scores * scores_mask
 
         retrieved_indices = []
@@ -282,7 +337,8 @@ class SearchEngine():
         results = [SearchResultSpec(
                     region_id=self.region_ids[i], region=self.regions[i],
                     hos_id=self.hos_ids[i], hos_name=self.hos_names[i],
-                    address=self.addresses[i], confidence=scores[i], type_name=self.type_names[i])
+                    address=self.addresses[i], confidence=scores[i], type_name=self.type_names[i],
+                    designated_type=self.designated_types_strs[i])
                     for i in retrieved_indices]
         return results
 
@@ -290,10 +346,13 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("query", type=str, help="hospital query string")
     parser.add_argument("k", type=int, help="topk's k")
-    parser.add_argument("--region", type=str, default="", help="See tw_hos_fuzz_search/data/regions.txt for supported region values")
+    parser.add_argument("--region", type=str, default="", help="業務組名稱 filter. See tw_hos_fuzz_search/data/regions.txt for supported region values")
+    parser.add_argument("--designated_types", type=str, nargs="*", help="特約類別說明的 filter. See tw_hos_fuzz_search/data/designated_types.txt",
+                        default=["醫學中心", "區域醫院", "地區醫院", "診所"])
+
     args = parser.parse_args()
     se = SearchEngine()
-    results = se.search(SearchQuerySpec(args.query, args.k, args.region))
+    results = se.search(SearchQuerySpec(args.query, args.k, args.region, args.designated_types))
     pprint(results)
 
 if __name__ == "__main__":

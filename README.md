@@ -15,7 +15,8 @@ A general-purpose fuzzy search engine for all hospital names (provided by Nation
     ```python
     import requests
     endpoint = "<your api endpoint>"
-    res = requests.post("http://{}/search".format(endpoint), json={"query": "中國醫", "k": 3})
+    res = requests.post("http://{}/search".format(endpoint),
+                        json={"query": "中國醫", "k": 3, "designated_types": ["醫學中心", "區域醫院", "地區醫院", "診所"]})
     print(res.json())
     ```
 
