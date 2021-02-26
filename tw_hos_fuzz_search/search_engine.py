@@ -158,7 +158,7 @@ class SearchEngine():
 
         region_ids, hos_ids, hos_names, addresses, type_names, designated_types_strs = \
             [], [], [], [], [], []
-        with self.hospbsc_path.open(encoding="utf-16", newline='') as csvfile:
+        with self.hospbsc_path.open(encoding="utf-8", newline='') as csvfile:
             reader = csv.reader(csvfile, delimiter=",")
             next(reader, None) # ignore the header
             for row in reader:
