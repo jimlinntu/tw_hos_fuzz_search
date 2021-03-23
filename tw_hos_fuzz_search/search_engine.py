@@ -17,6 +17,7 @@ EXTEND_HOSPITALS_PATH = DATA_DIR / "extend_hospitals.txt"
 REGION_PATH = DATA_DIR / "regions.txt"
 DESIGNATED_TYPES_PATH = DATA_DIR / "designated_types.txt"
 HOSTP_CODE_PATH = DATA_DIR / "hosp_code.txt"
+CITIES_PATH = DATA_DIR / "cities.txt"
 
 class SearchResultSpec():
     def __init__(self, region_id, region, hos_id, hos_name, address, confidence, type_name, designated_type):
@@ -54,20 +55,23 @@ class SearchResultSpec():
                     designated_type=self.designated_type)
 
 class SearchQuerySpec():
-    def __init__(self, query, k, region, designated_types):
+    def __init__(self, query, k, region, designated_types, address):
         assert isinstance(query, str)
         assert isinstance(k, int)
         assert isinstance(region, str)
         assert isinstance(designated_types, list)
+        assert isinstance(address, str)
         self.query = query
         self.k = k
         self.region = region
         self.designated_types = designated_types
+        self.address = address # where the patient lives
 
     @staticmethod
     def fromDict(query_dict):
         return SearchQuerySpec(query_dict["query"], query_dict["k"],
-                               query_dict.get("region", ""), query_dict.get("designated_types", []))
+                               query_dict.get("region", ""), query_dict.get("designated_types", []),
+                               query_dict.get("address", ""))
 
     @staticmethod
     def check_valid(query_dict):
@@ -88,7 +92,8 @@ class SearchQuerySpec():
 
 class SearchEngine():
     def __init__(self, hospbsc_path=None, extend_hospitals_path=None, region_path=None,
-                 designated_types_path=None, hosp_code_path=None, debug=True):
+                 designated_types_path=None, hosp_code_path=None, cities_path=None,
+                 debug=True):
         self.debug = debug
 
         self.hospbsc_path = HOSPBSC_PATH
@@ -116,12 +121,21 @@ class SearchEngine():
             assert isinstance(hosp_code_path, Path)
             self.hosp_code_path = hosp_code_path
 
+        self.cities_path = CITIES_PATH
+        if cities_path is not None:
+            assert isinstance(cities_path, Path)
+            self.cities_path = cities_path
+
         self.hosp_code_map = self._parse_hosp_code()
         self.designated_types_map, self.designated_types_set = self._parse_designated_types()
         self.region_ids, hos_ids, hos_names, self.addresses, self.type_names, self.designated_types_strs \
             = self._parse_hospbsc(self.hosp_code_map, self.designated_types_map, remove_empty_address=True,
                     add_extend_hospitals=True)
         self.region_map, self.region_set = self._parse_region()
+        self.city2idx, self.idx2city, self.addr2idx = self._parse_cities()
+
+        self.city_indices = [self.addr2idx(addr) for addr in self.addresses]
+
         self.regions = [self.region_map[idx] for idx in self.region_ids]
         self.type_scores = self._build_type_scores_by_rules(self.type_names)
 
@@ -245,6 +259,36 @@ class SearchEngine():
 
         return designated_types_map, designated_types_set
 
+    def _parse_cities(self):
+        city2idx = dict()
+        cities = []
+        idx2city = ["UNKNOWN_CITY"]
+
+        with self.cities_path.open(encoding="utf-8") as f:
+            for line in f:
+                line = line.strip()
+                if len(line) == 0: continue
+                city_and_aliases = line.split(",")
+                assert len(city_and_aliases) >= 1
+
+                cities.extend(city_and_aliases)
+
+                for c in city_and_aliases:
+                    city2idx[c] = len(idx2city)
+
+                idx2city.append(city_and_aliases[0])
+
+        # Convert addr to an index of city
+        def addr2idx(addr):
+            assert isinstance(addr, str)
+            addr = addr.replace(" ", "")
+            for c in cities:
+                if c in addr:
+                    return city2idx[c]
+            return 0
+
+        return city2idx, idx2city, addr2idx
+
     def _build_type_scores_by_rules(self, type_names):
         '''
             根據 型態別 給予加分
@@ -334,6 +378,12 @@ class SearchEngine():
 
             retrieved_indices = topk_indices_sorted
 
+        # Sort (score, if this index's city match user desired cities)
+        # the second element of the tuple will only effective if scores tie
+        retrieved_indices = list(retrieved_indices)
+        retrieved_indices.sort(key=lambda i: (scores[i], int(self.city_indices[i] == self.addr2idx(query_spec.address))),
+                               reverse=True)
+
         results = [SearchResultSpec(
                     region_id=self.region_ids[i], region=self.regions[i],
                     hos_id=self.hos_ids[i], hos_name=self.hos_names[i],
@@ -349,10 +399,12 @@ def main():
     parser.add_argument("--region", type=str, default="", help="業務組名稱 filter. See tw_hos_fuzz_search/data/regions.txt for supported region values")
     parser.add_argument("--designated_types", type=str, nargs="*", help="特約類別說明的 filter. See tw_hos_fuzz_search/data/designated_types.txt",
                         default=["醫學中心", "區域醫院", "地區醫院", "診所"])
+    parser.add_argument("--address", default="", help="使用者(病患)的地址")
 
     args = parser.parse_args()
     se = SearchEngine()
-    results = se.search(SearchQuerySpec(args.query, args.k, args.region, args.designated_types))
+    results = se.search(SearchQuerySpec(args.query, args.k, args.region,
+                                        args.designated_types, args.address))
     pprint(results)
 
 if __name__ == "__main__":
