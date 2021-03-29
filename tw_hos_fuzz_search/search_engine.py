@@ -363,26 +363,32 @@ class SearchEngine():
 
         retrieved_indices = []
 
-        if k == 1:
-            idx = np.argmax(scores)
-            retrieved_indices.append(idx)
+        if len(query_spec.address) == 0:
+            if k == 1:
+                idx = np.argmax(scores)
+                retrieved_indices.append(idx)
+            else:
+                # https://stackoverflow.com/questions/6910641/how-do-i-get-indices-of-n-maximum-values-in-a-numpy-array
+                # https://stackoverflow.com/questions/34226400/find-the-index-of-the-k-smallest-values-of-a-numpy-array
+                # argpartition will gaurantee the first kth element (if k > 0) in sorted (ascending) order
+                # and the last kth element in sorted (ascending) order
+
+                # O(n) (introselect) + O(k log k) (sorting)
+                indices = np.argpartition(scores, -k)
+                topk_indices_unsorted = indices[-k:]
+                topk_indices_sorted = topk_indices_unsorted[np.argsort(scores[topk_indices_unsorted])]
+                topk_indices_sorted = topk_indices_sorted[::-1]
+
+                retrieved_indices = topk_indices_sorted
         else:
-            # https://stackoverflow.com/questions/6910641/how-do-i-get-indices-of-n-maximum-values-in-a-numpy-array
-            # https://stackoverflow.com/questions/34226400/find-the-index-of-the-k-smallest-values-of-a-numpy-array
-            # argpartition will gaurantee the first kth element (if k > 0) in sorted (ascending) order
-            # and the last kth element in sorted (ascending) order
-            indices = np.argpartition(scores, -k)
-            topk_indices_unsorted = indices[-k:]
-            topk_indices_sorted = topk_indices_unsorted[np.argsort(scores[topk_indices_unsorted])]
-            topk_indices_sorted = topk_indices_sorted[::-1]
+            # sort (score, (the city of address == this hospital's city))
+            # the second element of the tuple will only effective if scores tie
 
-            retrieved_indices = topk_indices_sorted
-
-        # Sort (score, if this index's city match user desired cities)
-        # the second element of the tuple will only effective if scores tie
-        retrieved_indices = list(retrieved_indices)
-        retrieved_indices.sort(key=lambda i: (scores[i], int(self.city_indices[i] == self.addr2idx(query_spec.address))),
-                               reverse=True)
+            # O(n log n)
+            sorted_indices = sorted(range(len(self.hos_names)),
+                    key=lambda i: (scores[i], int(self.city_indices[i] == self.addr2idx(query_spec.address))),
+                    reverse=True)
+            retrieved_indices = sorted_indices[:k]
 
         results = [SearchResultSpec(
                     region_id=self.region_ids[i], region=self.regions[i],
